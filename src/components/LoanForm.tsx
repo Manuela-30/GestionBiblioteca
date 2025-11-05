@@ -33,6 +33,34 @@ const LoanForm: React.FC<LoanFormProps> = ({ onSuccess, onCancel }) => {
   const [userSearch, setUserSearch] = useState('');
   const [bookSearch, setBookSearch] = useState('');
 
+  /**
+   * Función auxiliar para manejar respuestas HTTP de forma segura
+   * Evita el error "Unexpected end of JSON input"
+   */
+  const safeJsonParse = async (response: Response) => {
+    const text = await response.text();
+    
+    if (!text || text.trim() === '') {
+      return {
+        success: false,
+        message: 'Respuesta vacía del servidor',
+        data: null
+      };
+    }
+    
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      console.error('Error parsing JSON:', error);
+      console.error('Response text:', text);
+      return {
+        success: false,
+        message: 'Respuesta inválida del servidor',
+        data: null
+      };
+    }
+  };
+
   useEffect(() => {
     loadUsers();
     if (action === 'borrow') {
@@ -49,7 +77,7 @@ const LoanForm: React.FC<LoanFormProps> = ({ onSuccess, onCancel }) => {
   const loadUsers = async () => {
     try {
       const response = await fetch('/api/users');
-      const data = await response.json();
+      const data = await safeJsonParse(response);
       if (data.success) {
         setUsers(data.data);
       }
@@ -61,7 +89,7 @@ const LoanForm: React.FC<LoanFormProps> = ({ onSuccess, onCancel }) => {
   const loadAvailableBooks = async () => {
     try {
       const response = await fetch('/api/books');
-      const data = await response.json();
+      const data = await safeJsonParse(response);
       if (data.success) {
         setBooks(data.data.filter((book: Book) => book.available_copies > 0));
       }
@@ -75,7 +103,7 @@ const LoanForm: React.FC<LoanFormProps> = ({ onSuccess, onCancel }) => {
     
     try {
       const response = await fetch(`/api/users/${selectedUser.user_id}/books`);
-      const data = await response.json();
+      const data = await safeJsonParse(response);
       if (data.success) {
         setUserBooks(data.data);
       }
@@ -99,6 +127,7 @@ const LoanForm: React.FC<LoanFormProps> = ({ onSuccess, onCancel }) => {
       let response;
       
       if (action === 'borrow') {
+        console.log('Prestando libro:', { user_id: selectedUser.user_id, isbn: selectedBook.isbn });
         response = await fetch('/api/loans', {
           method: 'POST',
           headers: {
@@ -110,21 +139,35 @@ const LoanForm: React.FC<LoanFormProps> = ({ onSuccess, onCancel }) => {
           }),
         });
       } else {
+        console.log('Devolviendo libro:', { user_id: selectedUser.user_id, isbn: selectedBook.isbn });
         response = await fetch(`/api/loans/${selectedUser.user_id}/${selectedBook.isbn}`, {
           method: 'DELETE'
         });
       }
 
-      const data = await response.json();
+      console.log('Respuesta del servidor - Status:', response.status);
+      const data = await safeJsonParse(response);
+      console.log('Datos parseados:', data);
 
       if (data.success) {
+        console.log('Operación exitosa:', data.message);
         onSuccess();
       } else {
-        setError(data.message || `Error al ${action === 'borrow' ? 'prestar' : 'devolver'} el libro`);
+        const errorMessage = data.message || `Error al ${action === 'borrow' ? 'prestar' : 'devolver'} el libro`;
+        console.error('Error del servidor:', errorMessage);
+        setError(errorMessage);
       }
     } catch (error) {
       console.error('Error:', error);
-      setError('Error de conexión. Intenta nuevamente.');
+      
+      // Manejar diferentes tipos de errores
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        setError('Error de conexión. Verifica que el servidor esté funcionando.');
+      } else if (error instanceof SyntaxError) {
+        setError('Error de comunicación con el servidor. Respuesta inválida.');
+      } else {
+        setError(`Error inesperado: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+      }
     } finally {
       setIsSubmitting(false);
     }

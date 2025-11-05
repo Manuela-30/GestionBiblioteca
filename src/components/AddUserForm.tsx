@@ -24,6 +24,34 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
     setError(''); // Limpiar error al cambiar datos
   };
 
+  /**
+   * Función auxiliar para manejar respuestas HTTP de forma segura
+   * Evita el error "Unexpected end of JSON input"
+   */
+  const safeJsonParse = async (response: Response) => {
+    const text = await response.text();
+    
+    if (!text || text.trim() === '') {
+      return {
+        success: false,
+        message: 'Respuesta vacía del servidor',
+        data: null
+      };
+    }
+    
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      console.error('Error parsing JSON:', error);
+      console.error('Response text:', text);
+      return {
+        success: false,
+        message: 'Respuesta inválida del servidor',
+        data: null
+      };
+    }
+  };
+
   const validateEmail = (email: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
@@ -32,7 +60,7 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validaciones
+    // Validaciones del frontend
     if (!formData.user_id.trim()) {
       setError('El ID de usuario es requerido');
       return;
@@ -54,24 +82,48 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
     setError('');
 
     try {
+      // Preparar datos para envío
+      const userData = {
+        user_id: formData.user_id.trim(),
+        name: formData.name.trim(),
+        email: formData.email.trim()
+      };
+
+      console.log('Enviando datos del usuario:', userData);
+
       const response = await fetch('/api/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(userData),
       });
 
-      const data = await response.json();
+      console.log('Respuesta del servidor - Status:', response.status);
+
+      // Usar función segura para parsear JSON
+      const data = await safeJsonParse(response);
+      console.log('Datos parseados:', data);
 
       if (data.success) {
+        console.log('Usuario agregado exitosamente:', data.data);
         onSuccess();
       } else {
-        setError(data.message || 'Error al agregar el usuario');
+        const errorMessage = data.message || 'Error desconocido al agregar el usuario';
+        console.error('Error del servidor:', errorMessage);
+        setError(errorMessage);
       }
     } catch (error) {
       console.error('Error:', error);
-      setError('Error de conexión. Intenta nuevamente.');
+      
+      // Manejar diferentes tipos de errores
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        setError('Error de conexión. Verifica que el servidor esté funcionando.');
+      } else if (error instanceof SyntaxError) {
+        setError('Error de comunicación con el servidor. Respuesta inválida.');
+      } else {
+        setError(`Error inesperado: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -90,7 +142,17 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
     <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <p className="text-sm text-red-600">{error}</p>
+          <div className="flex items-start space-x-2">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium text-red-800">Error al registrar usuario</h3>
+              <p className="text-sm text-red-600 mt-1">{error}</p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -109,10 +171,12 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
               placeholder="U001, USER123, etc."
               className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               required
+              disabled={isSubmitting}
             />
             <button
               type="button"
               onClick={generateUserId}
+              disabled={isSubmitting}
               className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-lg transition-colors"
             >
               Generar
@@ -136,6 +200,7 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
             placeholder="Juan Pérez García"
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             required
+            disabled={isSubmitting}
           />
         </div>
 
@@ -152,6 +217,7 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
             placeholder="usuario@ejemplo.com"
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             required
+            disabled={isSubmitting}
           />
         </div>
       </div>
@@ -172,6 +238,7 @@ const AddUserForm: React.FC<AddUserFormProps> = ({ onSuccess, onCancel }) => {
         <button
           type="button"
           onClick={onCancel}
+          disabled={isSubmitting}
           className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
         >
           Cancelar

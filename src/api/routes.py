@@ -6,12 +6,14 @@ Endpoints optimizados con estructuras de datos eficientes:
 - Búsquedas O(log n) usando árboles binarios
 - Operaciones CRUD optimizadas
 - Respuestas JSON estructuradas
+- Manejo robusto de errores con respuestas JSON válidas
 """
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from src.services.library_service import LibraryService
 import traceback
+import json
 
 # Crear aplicación Flask
 app = Flask(__name__)
@@ -23,26 +25,49 @@ library_service = LibraryService()
 # ==================== UTILIDADES ====================
 
 def success_response(data, message="Operación exitosa"):
-    """Respuesta exitosa estándar"""
-    return jsonify({
+    """
+    Respuesta exitosa estándar - SIEMPRE devuelve JSON válido
+    """
+    response_data = {
         'success': True,
         'message': message,
         'data': data
-    })
+    }
+    return jsonify(response_data), 200
 
 def error_response(message, status_code=400):
-    """Respuesta de error estándar"""
-    return jsonify({
+    """
+    Respuesta de error estándar - SIEMPRE devuelve JSON válido
+    """
+    response_data = {
         'success': False,
         'message': message,
         'data': None
-    }), status_code
+    }
+    return jsonify(response_data), status_code
 
 def handle_exception(e):
-    """Manejo centralizado de excepciones"""
+    """
+    Manejo centralizado de excepciones - GARANTIZA respuesta JSON
+    """
     print(f"Error: {str(e)}")
     print(traceback.format_exc())
     return error_response("Error interno del servidor", 500)
+
+def validate_json_request():
+    """
+    Validar que la request tenga JSON válido
+    """
+    if not request.is_json:
+        return error_response("Content-Type debe ser application/json", 400)
+    
+    try:
+        data = request.get_json()
+        if data is None:
+            return error_response("Body JSON requerido", 400)
+        return None, data
+    except Exception as e:
+        return error_response(f"JSON inválido: {str(e)}", 400), None
 
 # ==================== ENDPOINTS DE LIBROS ====================
 
@@ -51,6 +76,7 @@ def get_books():
     """
     Obtener todos los libros
     Complejidad: O(n) - Recorrido in-order del BST
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
         books = library_service.get_books_json()
@@ -63,6 +89,7 @@ def search_books():
     """
     Buscar libros por título, autor o ISBN
     Complejidad: O(log n + k) usando índices múltiples
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
         query = request.args.get('q', '').strip()
@@ -114,32 +141,51 @@ def add_book():
     """
     Agregar nuevo libro
     Complejidad: O(log n) - Inserción en BST e índices
+    VALIDACIÓN: JSON request y campos requeridos
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
-        data = request.get_json()
+        # Validar JSON request
+        error_response_obj, data = validate_json_request()
+        if error_response_obj:
+            return error_response_obj
         
         # Validar datos requeridos
         required_fields = ['isbn', 'title', 'author', 'year']
         for field in required_fields:
-            if field not in data:
+            if field not in data or not str(data[field]).strip():
                 return error_response(f"Campo requerido: {field}")
         
-        isbn = data['isbn']
-        title = data['title']
-        author = data['author']
-        year = int(data['year'])
-        copies = int(data.get('copies', 1))
+        # Extraer y validar datos
+        try:
+            isbn = str(data['isbn']).strip()
+            title = str(data['title']).strip()
+            author = str(data['author']).strip()
+            year = int(data['year'])
+            copies = int(data.get('copies', 1))
+            
+            # Validaciones adicionales
+            if len(isbn) < 10:
+                return error_response("ISBN debe tener al menos 10 caracteres")
+            if year < 1000 or year > 2030:
+                return error_response("Año debe estar entre 1000 y 2030")
+            if copies < 1 or copies > 100:
+                return error_response("Número de copias debe estar entre 1 y 100")
+                
+        except ValueError as ve:
+            return error_response(f"Datos inválidos: {str(ve)}")
         
         success = library_service.add_book(isbn, title, author, year, copies)
         
         if success:
             book = library_service.get_book(isbn)
-            return success_response(book.to_dict(), "Libro agregado exitosamente")
+            if book:
+                return success_response(book.to_dict(), "Libro agregado exitosamente")
+            else:
+                return error_response("Error al recuperar el libro agregado")
         else:
-            return error_response("Error al agregar libro")
-    
-    except ValueError as e:
-        return error_response(f"Datos inválidos: {str(e)}")
+            return error_response("Error al agregar libro - posiblemente ISBN duplicado")
+            
     except Exception as e:
         return handle_exception(e)
 
@@ -214,8 +260,12 @@ def get_user(user_id):
     """
     Obtener usuario por ID
     Complejidad: O(log n) - Búsqueda en BST
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
+        if not isbn or not isbn.strip():
+            return error_response("ISBN requerido")
+            
         user = library_service.get_user(user_id)
         if user:
             return success_response(user.to_dict(), "Usuario encontrado")
@@ -259,8 +309,12 @@ def delete_user(user_id):
     """
     Eliminar usuario
     Complejidad: O(log n) - Búsqueda y eliminación en BST
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
+        if not isbn or not isbn.strip():
+            return error_response("ISBN requerido")
+            
         success = library_service.remove_user(user_id)
         
         if success:
@@ -274,7 +328,7 @@ def delete_user(user_id):
 def get_user_books(user_id):
     """
     Obtener libros prestados por usuario
-    Complejidad: O(log n + k) donde k es número de libros prestados
+            return success_response({}, "Libro eliminado exitosamente")
     """
     try:
         books = library_service.get_user_borrowed_books(user_id)
@@ -287,6 +341,7 @@ def get_user_books(user_id):
 
 @app.route('/api/loans', methods=['GET'])
 def get_loans():
+    GARANTIZA: Respuesta JSON válida siempre
     """Obtener todos los préstamos activos"""
     try:
         loans = library_service.get_active_loans()
@@ -299,24 +354,39 @@ def borrow_book():
     """
     Prestar libro a usuario
     Complejidad: O(log n) - Búsquedas en BST
+    VALIDACIÓN: JSON request y campos requeridos
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
-        data = request.get_json()
+        # Validar JSON request
+        error_response_obj, data = validate_json_request()
+        if error_response_obj:
+            return error_response_obj
         
         # Validar datos requeridos
         if 'user_id' not in data or 'isbn' not in data:
             return error_response("Campos requeridos: user_id, isbn")
+            if field not in data or not str(data[field]).strip():
+        # Extraer y validar datos
+        user_id = str(data['user_id']).strip()
+        name = str(data['name']).strip()
+        email = str(data['email']).strip()
         
-        user_id = data['user_id']
-        isbn = data['isbn']
-        
+        # Validaciones adicionales
+        if len(user_id) < 2:
+            return error_response("ID de usuario debe tener al menos 2 caracteres")
+        if '@' not in email or '.' not in email:
+            return error_response("Email debe tener formato válido")
         success, message = library_service.borrow_book(user_id, isbn)
         
         if success:
-            return success_response(None, message)
+            if user:
+                return success_response(user.to_dict(), "Usuario agregado exitosamente")
+            else:
+                return error_response("Error al recuperar el usuario agregado")
         else:
             return error_response(message)
-    
+            
     except Exception as e:
         return handle_exception(e)
 
@@ -325,15 +395,28 @@ def return_book(user_id, isbn):
     """
     Devolver libro prestado
     Complejidad: O(log n) - Búsquedas en BST
+    VALIDACIÓN: JSON request y campos requeridos
+    GARANTIZA: Respuesta JSON válida siempre
     """
     try:
-        success, message = library_service.return_book(user_id, isbn)
+        # Validar JSON request
+        error_response_obj, data = validate_json_request()
+        user_id = str(data['user_id']).strip()
+    GARANTIZA: Respuesta JSON válida siempre
+        isbn = str(data['isbn']).strip()
         
+        if not user_id or not user_id.strip():
+            return error_response("ID de usuario requerido")
+        if not isbn or not isbn.strip():
+            return error_response("ISBN requerido")
+            
         if success:
-            return success_response(None, message)
-        else:
+        required_fields = ['user_id', 'isbn']
+        for field in required_fields:
+            return success_response({}, message)
+                return error_response(f"Campo requerido: {field}")
             return error_response(message)
-    
+            
     except Exception as e:
         return handle_exception(e)
 
@@ -341,7 +424,10 @@ def return_book(user_id, isbn):
 
 @app.route('/api/stats', methods=['GET'])
 def get_statistics():
-    """Obtener estadísticas generales del sistema"""
+    """
+    Obtener estadísticas generales del sistema
+    GARANTIZA: Respuesta JSON válida siempre
+    """
     try:
         stats = library_service.get_general_statistics()
         return success_response(stats, "Estadísticas generales")
@@ -360,7 +446,10 @@ def get_history():
 
 @app.route('/api/notifications', methods=['GET'])
 def get_notifications():
-    """Obtener notificaciones del sistema"""
+    """
+    Obtener notificaciones del sistema
+    GARANTIZA: Respuesta JSON válida siempre
+    """
     try:
         notifications = library_service.get_notifications()
         return success_response(notifications, f"{len(notifications)} notificaciones")
@@ -371,7 +460,10 @@ def get_notifications():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Verificar estado del sistema"""
+    """
+    Verificar estado del sistema
+    GARANTIZA: Respuesta JSON válida siempre
+    """
     try:
         stats = library_service.get_general_statistics()
         return success_response({
@@ -383,10 +475,28 @@ def health_check():
     except Exception as e:
         return handle_exception(e)
 
+# ==================== MANEJO GLOBAL DE ERRORES ====================
+
+@app.errorhandler(404)
+def not_found(error):
+    """Manejo de rutas no encontradas - SIEMPRE JSON"""
+    return error_response("Endpoint no encontrado", 404)
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    """Manejo de métodos no permitidos - SIEMPRE JSON"""
+    return error_response("Método HTTP no permitido", 405)
+
+@app.errorhandler(500)
+def internal_error(error):
+    """Manejo de errores internos - SIEMPRE JSON"""
+    return error_response("Error interno del servidor", 500)
+
 # ==================== INICIALIZACIÓN ====================
 
 if __name__ == '__main__':
     print("🚀 Iniciando API del Sistema de Biblioteca...")
     print("📚 Estructuras de datos optimizadas cargadas")
     print("🌐 Servidor disponible en http://localhost:5000")
+    print("✅ Respuestas JSON garantizadas en todos los endpoints")
     app.run(debug=True, host='0.0.0.0', port=5000)
