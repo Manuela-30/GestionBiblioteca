@@ -17,6 +17,58 @@ const AddBookForm: React.FC<AddBookFormProps> = ({ onSuccess, onCancel }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  /**
+   * FUNCIÓN CRÍTICA: Manejo seguro de respuestas JSON
+   * PREVIENE: "Unexpected end of JSON input"
+   * GARANTIZA: Siempre retorna un objeto válido
+   */
+  const safeJsonParse = async (response: Response) => {
+    try {
+      // Paso 1: Obtener texto de la respuesta
+      const text = await response.text();
+      console.log('Respuesta raw del servidor:', text);
+      
+      // Paso 2: Verificar si hay contenido
+      if (!text || text.trim() === '') {
+        console.warn('Respuesta vacía del servidor');
+        return {
+          success: false,
+          message: 'Respuesta vacía del servidor',
+          data: null
+        };
+      }
+      
+      // Paso 3: Intentar parsear JSON
+      const parsed = JSON.parse(text);
+      console.log('JSON parseado exitosamente:', parsed);
+      
+      // Paso 4: Validar estructura esperada
+      if (typeof parsed !== 'object' || parsed === null) {
+        console.warn('Estructura JSON inválida');
+        return {
+          success: false,
+          message: 'Estructura de respuesta inválida',
+          data: null
+        };
+      }
+      
+      // Paso 5: Asegurar propiedades requeridas
+      return {
+        success: parsed.success !== undefined ? Boolean(parsed.success) : false,
+        message: parsed.message || 'Sin mensaje',
+        data: parsed.data !== undefined ? parsed.data : null
+      };
+      
+    } catch (error) {
+      console.error('Error en safeJsonParse:', error);
+      return {
+        success: false,
+        message: 'Error al procesar respuesta del servidor',
+        data: null
+      };
+    }
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -27,56 +79,41 @@ const AddBookForm: React.FC<AddBookFormProps> = ({ onSuccess, onCancel }) => {
   };
 
   /**
-   * Función auxiliar para manejar respuestas HTTP de forma segura
-   * Evita el error "Unexpected end of JSON input"
+   * VALIDACIÓN ROBUSTA: Verificar datos antes de enviar
    */
-  const safeJsonParse = async (response: Response) => {
-    const text = await response.text();
-    
-    // Si no hay contenido, devolver objeto por defecto
-    if (!text || text.trim() === '') {
-      return {
-        success: false,
-        message: 'Respuesta vacía del servidor',
-        data: null
-      };
+  const validateFormData = () => {
+    if (!formData.isbn.trim()) {
+      setError('El ISBN es requerido');
+      return false;
     }
-    
-    try {
-      return JSON.parse(text);
-    } catch (error) {
-      console.error('Error parsing JSON:', error);
-      console.error('Response text:', text);
-      return {
-        success: false,
-        message: 'Respuesta inválida del servidor',
-        data: null
-      };
+    if (formData.isbn.trim().length < 10) {
+      setError('El ISBN debe tener al menos 10 caracteres');
+      return false;
     }
+    if (!formData.title.trim()) {
+      setError('El título es requerido');
+      return false;
+    }
+    if (!formData.author.trim()) {
+      setError('El autor es requerido');
+      return false;
+    }
+    if (formData.year < 1000 || formData.year > new Date().getFullYear() + 10) {
+      setError('El año debe ser válido');
+      return false;
+    }
+    if (formData.copies < 1 || formData.copies > 100) {
+      setError('El número de copias debe estar entre 1 y 100');
+      return false;
+    }
+    return true;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validaciones del frontend
-    if (!formData.isbn.trim()) {
-      setError('El ISBN es requerido');
-      return;
-    }
-    if (!formData.title.trim()) {
-      setError('El título es requerido');
-      return;
-    }
-    if (!formData.author.trim()) {
-      setError('El autor es requerido');
-      return;
-    }
-    if (formData.year < 1000 || formData.year > new Date().getFullYear() + 10) {
-      setError('El año debe ser válido');
-      return;
-    }
-    if (formData.copies < 1) {
-      setError('Debe haber al menos 1 copia');
+    // Validar formulario antes de enviar
+    if (!validateFormData()) {
       return;
     }
 
@@ -84,50 +121,72 @@ const AddBookForm: React.FC<AddBookFormProps> = ({ onSuccess, onCancel }) => {
     setError('');
 
     try {
-      // Preparar datos para envío
+      // Preparar datos con validación adicional
       const bookData = {
         isbn: formData.isbn.trim(),
         title: formData.title.trim(),
         author: formData.author.trim(),
-        year: formData.year,
-        copies: formData.copies
+        year: Number(formData.year),
+        copies: Number(formData.copies)
       };
 
       console.log('Enviando datos del libro:', bookData);
 
-      const response = await fetch('/api/books', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(bookData),
-      });
+      // Realizar petición con timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos timeout
 
-      console.log('Respuesta del servidor - Status:', response.status);
-      console.log('Respuesta del servidor - Headers:', response.headers);
+      try {
+        const response = await fetch('/api/books', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify(bookData),
+          signal: controller.signal
+        });
 
-      // Usar función segura para parsear JSON
-      const data = await safeJsonParse(response);
-      console.log('Datos parseados:', data);
+        clearTimeout(timeoutId);
 
-      if (data.success) {
-        console.log('Libro agregado exitosamente:', data.data);
-        onSuccess();
-      } else {
-        const errorMessage = data.message || 'Error desconocido al agregar el libro';
-        console.error('Error del servidor:', errorMessage);
-        setError(errorMessage);
+        console.log('Respuesta del servidor - Status:', response.status);
+        console.log('Respuesta del servidor - OK:', response.ok);
+
+        // CRÍTICO: Usar función segura para parsear JSON
+        const data = await safeJsonParse(response);
+        console.log('Datos parseados:', data);
+
+        if (data.success) {
+          console.log('Libro agregado exitosamente:', data.data);
+          onSuccess();
+        } else {
+          const errorMessage = data.message || 'Error desconocido al agregar el libro';
+          console.error('Error del servidor:', errorMessage);
+          setError(errorMessage);
+        }
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          setError('Timeout: El servidor tardó demasiado en responder');
+        } else {
+          throw fetchError; // Re-lanzar para el catch externo
+        }
       }
+      
     } catch (error) {
       console.error('Error:', error);
       
-      // Manejar diferentes tipos de errores
+      // Manejo específico de diferentes tipos de errores
       if (error instanceof TypeError && error.message.includes('fetch')) {
         setError('Error de conexión. Verifica que el servidor esté funcionando.');
-      } else if (error instanceof SyntaxError) {
-        setError('Error de comunicación con el servidor. Respuesta inválida.');
+      } else if (error instanceof SyntaxError && error.message.includes('JSON')) {
+        setError('Error de comunicación: Respuesta inválida del servidor.');
+      } else if (error instanceof Error && error.message.includes('NetworkError')) {
+        setError('Error de red. Verifica tu conexión a internet.');
       } else {
-        setError(`Error inesperado: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+        const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+        setError(`Error inesperado: ${errorMessage}`);
       }
     } finally {
       setIsSubmitting(false);

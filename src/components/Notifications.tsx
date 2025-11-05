@@ -13,6 +13,58 @@ const Notifications: React.FC = () => {
   const [showDropdown, setShowDropdown] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
+  /**
+   * FUNCIÓN CRÍTICA: Manejo seguro de respuestas JSON
+   * PREVIENE: "Unexpected end of JSON input"
+   * GARANTIZA: Siempre retorna un objeto válido
+   */
+  const safeJsonParse = async (response: Response) => {
+    try {
+      // Paso 1: Obtener texto de la respuesta
+      const text = await response.text();
+      console.log('Notifications - Respuesta raw:', text);
+      
+      // Paso 2: Verificar si hay contenido
+      if (!text || text.trim() === '') {
+        console.warn('Notifications - Respuesta vacía del servidor');
+        return {
+          success: true,
+          message: 'Sin notificaciones',
+          data: []
+        };
+      }
+      
+      // Paso 3: Intentar parsear JSON
+      const parsed = JSON.parse(text);
+      console.log('Notifications - JSON parseado:', parsed);
+      
+      // Paso 4: Validar estructura esperada
+      if (typeof parsed !== 'object' || parsed === null) {
+        console.warn('Notifications - Estructura JSON inválida');
+        return {
+          success: false,
+          message: 'Estructura de respuesta inválida',
+          data: []
+        };
+      }
+      
+      // Paso 5: Asegurar propiedades requeridas
+      return {
+        success: parsed.success !== undefined ? Boolean(parsed.success) : true,
+        message: parsed.message || 'Notificaciones cargadas',
+        data: Array.isArray(parsed.data) ? parsed.data : []
+      };
+      
+    } catch (error) {
+      console.error('Notifications - Error en safeJsonParse:', error);
+      return {
+        success: false,
+        message: 'Error al procesar notificaciones',
+        data: []
+      };
+    }
+  };
+
   useEffect(() => {
     // Cargar notificaciones iniciales
     loadNotifications();
@@ -25,30 +77,71 @@ const Notifications: React.FC = () => {
 
   const loadNotifications = async () => {
     try {
-      const response = await fetch('/api/notifications');
-      const data = await response.json();
+      console.log('Cargando notificaciones...');
       
-      if (data.success && data.data.length > 0) {
-        const newNotifications = data.data.map((message: string, index: number) => ({
+      // Realizar petición con timeout y headers apropiados
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 segundos timeout
+      
+      const response = await fetch('/api/notifications', {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      console.log('Notifications - Status:', response.status);
+      console.log('Notifications - OK:', response.ok);
+      
+      // CRÍTICO: Usar función segura para parsear JSON
+      const data = await safeJsonParse(response);
+      console.log('Notifications - Datos parseados:', data);
+      
+      if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+        // Procesar notificaciones de forma segura
+        const newNotifications = data.data
+          .filter((message: any) => message && typeof message === 'string') // Filtrar mensajes válidos
+          .map((message: string, index: number) => ({
           id: `${Date.now()}-${index}`,
-          message,
+          message: String(message), // Asegurar que sea string
           type: getNotificationType(message),
           timestamp: new Date()
         }));
         
-        setNotifications(prev => [...newNotifications, ...prev].slice(0, 20)); // Mantener solo las últimas 20
-        setUnreadCount(prev => prev + newNotifications.length);
+        if (newNotifications.length > 0) {
+          setNotifications(prev => [...newNotifications, ...prev].slice(0, 20)); // Mantener solo las últimas 20
+          setUnreadCount(prev => prev + newNotifications.length);
+          console.log(`Notifications - ${newNotifications.length} nuevas notificaciones agregadas`);
+        }
+      } else {
+        console.log('Notifications - No hay nuevas notificaciones');
       }
     } catch (error) {
-      console.error('Error cargando notificaciones:', error);
+      console.error('Notifications - Error cargando:', error);
+      
+      // No mostrar error al usuario para notificaciones, solo log
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.warn('Notifications - Timeout al cargar notificaciones');
+      } else if (error instanceof TypeError && error.message.includes('fetch')) {
+        console.warn('Notifications - Error de conexión al cargar notificaciones');
+      } else {
+        console.warn('Notifications - Error inesperado:', error);
+      }
     }
   };
 
-  const getNotificationType = (message: string): 'success' | 'warning' | 'info' => {
-    if (message.includes('agregado') || message.includes('prestado') || message.includes('devuelto')) {
+  const getNotificationType = (message: string | any): 'success' | 'warning' | 'info' => {
+    // Asegurar que message sea string
+    const messageStr = String(message || '').toLowerCase();
+    
+    if (messageStr.includes('agregado') || messageStr.includes('prestado') || messageStr.includes('devuelto')) {
       return 'success';
     }
-    if (message.includes('eliminado') || message.includes('error')) {
+    if (messageStr.includes('eliminado') || messageStr.includes('error')) {
       return 'warning';
     }
     return 'info';

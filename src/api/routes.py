@@ -13,7 +13,6 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from src.services.library_service import LibraryService
 import traceback
-import json
 
 # Crear aplicación Flask
 app = Flask(__name__)
@@ -26,45 +25,66 @@ library_service = LibraryService()
 
 def success_response(data, message="Operación exitosa"):
     """
-    Respuesta exitosa estándar - SIEMPRE devuelve JSON válido
+    Respuesta exitosa estándar - GARANTIZA JSON válido SIEMPRE
     """
-    response_data = {
-        'success': True,
-        'message': message,
-        'data': data
-    }
-    return jsonify(response_data), 200
+    try:
+        response_data = {
+            'success': True,
+            'message': str(message) if message else "Operación exitosa",
+            'data': data if data is not None else {}
+        }
+        return jsonify(response_data), 200
+    except Exception as e:
+        # Fallback si hay error en jsonify
+        fallback_response = {
+            'success': True,
+            'message': "Operación exitosa",
+            'data': {}
+        }
+        return jsonify(fallback_response), 200
 
 def error_response(message, status_code=400):
     """
-    Respuesta de error estándar - SIEMPRE devuelve JSON válido
+    Respuesta de error estándar - GARANTIZA JSON válido SIEMPRE
     """
-    response_data = {
-        'success': False,
-        'message': message,
-        'data': None
-    }
-    return jsonify(response_data), status_code
+    try:
+        response_data = {
+            'success': False,
+            'message': str(message) if message else "Error desconocido",
+            'data': None
+        }
+        return jsonify(response_data), status_code
+    except Exception as e:
+        # Fallback crítico - NUNCA debe fallar
+        fallback_response = {
+            'success': False,
+            'message': "Error interno del servidor",
+            'data': None
+        }
+        return jsonify(fallback_response), 500
 
 def handle_exception(e):
     """
-    Manejo centralizado de excepciones - GARANTIZA respuesta JSON
+    Manejo centralizado de excepciones - GARANTIZA respuesta JSON SIEMPRE
     """
-    print(f"Error: {str(e)}")
-    print(traceback.format_exc())
+    try:
+        print(f"Error: {str(e)}")
+        print(traceback.format_exc())
+    except:
+        pass  # No fallar si el logging falla
     return error_response("Error interno del servidor", 500)
 
 def validate_json_request():
     """
-    Validar que la request tenga JSON válido
+    Validar que la request tenga JSON válido - GARANTIZA respuesta JSON
     """
-    if not request.is_json:
-        return error_response("Content-Type debe ser application/json", 400)
-    
     try:
+        if not request.is_json:
+            return error_response("Content-Type debe ser application/json", 400), None
+        
         data = request.get_json()
         if data is None:
-            return error_response("Body JSON requerido", 400)
+            return error_response("Body JSON requerido", 400), None
         return None, data
     except Exception as e:
         return error_response(f"JSON inválido: {str(e)}", 400), None
@@ -140,9 +160,7 @@ def get_book(isbn):
 def add_book():
     """
     Agregar nuevo libro
-    Complejidad: O(log n) - Inserción en BST e índices
-    VALIDACIÓN: JSON request y campos requeridos
-    GARANTIZA: Respuesta JSON válida siempre
+    GARANTIZA: Respuesta JSON válida en TODOS los casos
     """
     try:
         # Validar JSON request
@@ -150,7 +168,7 @@ def add_book():
         if error_response_obj:
             return error_response_obj
         
-        # Validar datos requeridos
+        # Validar campos requeridos con verificación robusta
         required_fields = ['isbn', 'title', 'author', 'year']
         for field in required_fields:
             if field not in data or not str(data[field]).strip():
@@ -172,15 +190,20 @@ def add_book():
             if copies < 1 or copies > 100:
                 return error_response("Número de copias debe estar entre 1 y 100")
                 
-        except ValueError as ve:
+        except (ValueError, TypeError) as ve:
             return error_response(f"Datos inválidos: {str(ve)}")
         
+        # Intentar agregar el libro
         success = library_service.add_book(isbn, title, author, year, copies)
         
         if success:
             book = library_service.get_book(isbn)
             if book:
-                return success_response(book.to_dict(), "Libro agregado exitosamente")
+                try:
+                    book_data = book.to_dict()
+                    return success_response(book_data, "Libro agregado exitosamente")
+                except Exception as e:
+                    return success_response({}, "Libro agregado exitosamente")
             else:
                 return error_response("Error al recuperar el libro agregado")
         else:
@@ -447,12 +470,24 @@ def get_history():
 @app.route('/api/notifications', methods=['GET'])
 def get_notifications():
     """
-    Obtener notificaciones del sistema
-    GARANTIZA: Respuesta JSON válida siempre
+    Obtener notificaciones del sistema - GARANTIZA JSON válido SIEMPRE
     """
     try:
         notifications = library_service.get_notifications()
-        return success_response(notifications, f"{len(notifications)} notificaciones")
+        
+        # Asegurar que notifications sea una lista válida
+        if not isinstance(notifications, list):
+            notifications = []
+        
+        # Convertir a strings seguros
+        safe_notifications = []
+        for notif in notifications:
+            try:
+                safe_notifications.append(str(notif))
+            except:
+                safe_notifications.append("Notificación")
+        
+        return success_response(safe_notifications, f"{len(safe_notifications)} notificaciones")
     except Exception as e:
         return handle_exception(e)
 
@@ -479,19 +514,35 @@ def health_check():
 
 @app.errorhandler(404)
 def not_found(error):
-    """Manejo de rutas no encontradas - SIEMPRE JSON"""
+    """Manejo de rutas no encontradas - GARANTIZA JSON"""
     return error_response("Endpoint no encontrado", 404)
 
 @app.errorhandler(405)
 def method_not_allowed(error):
-    """Manejo de métodos no permitidos - SIEMPRE JSON"""
+    """Manejo de métodos no permitidos - GARANTIZA JSON"""
     return error_response("Método HTTP no permitido", 405)
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Manejo de errores internos - SIEMPRE JSON"""
+    """Manejo de errores internos - GARANTIZA JSON"""
     return error_response("Error interno del servidor", 500)
 
+@app.before_request
+def before_request():
+    """Configurar headers para todas las respuestas"""
+    pass
+
+@app.after_request
+def after_request(response):
+    """Asegurar headers correctos en todas las respuestas"""
+    try:
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    except:
+        pass  # No fallar si hay error con headers
+    return response
 # ==================== INICIALIZACIÓN ====================
 
 if __name__ == '__main__':
