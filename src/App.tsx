@@ -81,6 +81,68 @@ function App() {
   const [bookSortBy, setBookSortBy] = useState<'title' | 'author' | 'popularity' | 'availability'>('title');
   const [userSortBy, setUserSortBy] = useState<'name' | 'activity' | 'borrowed_count'>('name');
 
+  /**
+   * FUNCIÓN CRÍTICA: Manejo seguro de respuestas JSON
+   * PREVIENE: "Unexpected end of JSON input"
+   * GARANTIZA: Siempre retorna un objeto válido
+   */
+  const safeJsonParse = async (response: Response) => {
+    try {
+      // Paso 1: Verificar si la respuesta es exitosa
+      if (!response.ok) {
+        console.warn(`HTTP Error: ${response.status} - ${response.statusText}`);
+        return {
+          success: false,
+          message: `Error HTTP: ${response.status}`,
+          data: []
+        };
+      }
+
+      // Paso 2: Obtener texto de la respuesta
+      const text = await response.text();
+      console.log(`Respuesta raw de ${response.url}:`, text);
+      
+      // Paso 3: Verificar si hay contenido
+      if (!text || text.trim() === '') {
+        console.warn('Respuesta vacía del servidor');
+        return {
+          success: true,
+          message: 'Sin datos disponibles',
+          data: []
+        };
+      }
+      
+      // Paso 4: Intentar parsear JSON
+      const parsed = JSON.parse(text);
+      console.log('JSON parseado exitosamente:', parsed);
+      
+      // Paso 5: Validar estructura esperada
+      if (typeof parsed !== 'object' || parsed === null) {
+        console.warn('Estructura JSON inválida');
+        return {
+          success: false,
+          message: 'Estructura de respuesta inválida',
+          data: []
+        };
+      }
+      
+      // Paso 6: Asegurar propiedades requeridas
+      return {
+        success: parsed.success !== undefined ? Boolean(parsed.success) : true,
+        message: parsed.message || 'Datos cargados correctamente',
+        data: Array.isArray(parsed.data) ? parsed.data : (parsed.data ? [parsed.data] : [])
+      };
+      
+    } catch (error) {
+      console.error('Error en safeJsonParse:', error);
+      return {
+        success: false,
+        message: 'Error al procesar respuesta del servidor',
+        data: []
+      };
+    }
+  };
+
   // Cargar datos iniciales
   useEffect(() => {
     loadInitialData();
@@ -98,26 +160,142 @@ function App() {
   const loadInitialData = async () => {
     try {
       setLoading(true);
+      console.log('🔄 Iniciando carga de datos iniciales...');
       
-      // Cargar datos en paralelo para mejor rendimiento
-      const [booksRes, usersRes, statsRes] = await Promise.all([
-        fetch('/api/books'),
-        fetch('/api/users'),
-        fetch('/api/stats')
-      ]);
+      // Configurar timeout para las peticiones
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        console.warn('⏰ Timeout en carga de datos iniciales');
+      }, 15000); // 15 segundos timeout
 
-      const booksData = await booksRes.json();
-      const usersData = await usersRes.json();
-      const statsData = await statsRes.json();
+      try {
+        // Cargar datos en paralelo para mejor rendimiento
+        console.log('📚 Cargando libros...');
+        console.log('👥 Cargando usuarios...');
+        console.log('📊 Cargando estadísticas...');
+        
+        const [booksRes, usersRes, statsRes] = await Promise.all([
+          fetch('/api/books', {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            signal: controller.signal
+          }),
+          fetch('/api/users', {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            signal: controller.signal
+          }),
+          fetch('/api/stats', {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+            signal: controller.signal
+          })
+        ]);
 
-      if (booksData.success) setBooks(booksData.data);
-      if (usersData.success) setUsers(usersData.data);
-      if (statsData.success) setStats(statsData.data);
+        clearTimeout(timeoutId);
+
+        // Procesar respuestas de forma segura
+        console.log('🔍 Procesando respuestas...');
+        
+        const booksData = await safeJsonParse(booksRes);
+        const usersData = await safeJsonParse(usersRes);
+        const statsData = await safeJsonParse(statsRes);
+
+        // Actualizar estado solo si hay datos válidos
+        if (booksData.success && Array.isArray(booksData.data)) {
+          setBooks(booksData.data);
+          console.log(`✅ ${booksData.data.length} libros cargados`);
+        } else {
+          console.warn('⚠️ No se pudieron cargar los libros:', booksData.message);
+          setBooks([]); // Asegurar array vacío
+        }
+
+        if (usersData.success && Array.isArray(usersData.data)) {
+          setUsers(usersData.data);
+          console.log(`✅ ${usersData.data.length} usuarios cargados`);
+        } else {
+          console.warn('⚠️ No se pudieron cargar los usuarios:', usersData.message);
+          setUsers([]); // Asegurar array vacío
+        }
+
+        if (statsData.success && statsData.data) {
+          setStats(statsData.data);
+          console.log('✅ Estadísticas cargadas');
+        } else {
+          console.warn('⚠️ No se pudieron cargar las estadísticas:', statsData.message);
+          // Establecer estadísticas por defecto
+          setStats({
+            total_books: 0,
+            total_copies: 0,
+            available_copies: 0,
+            borrowed_copies: 0,
+            total_users: 0,
+            active_users: 0,
+            utilization_rate: 0
+          });
+        }
+
+        console.log('🎉 Carga de datos iniciales completada');
+
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          console.error('⏰ Timeout: El servidor tardó demasiado en responder');
+          // Establecer datos por defecto en caso de timeout
+          setBooks([]);
+          setUsers([]);
+          setStats({
+            total_books: 0,
+            total_copies: 0,
+            available_copies: 0,
+            borrowed_copies: 0,
+            total_users: 0,
+            active_users: 0,
+            utilization_rate: 0
+          });
+        } else {
+          throw fetchError; // Re-lanzar para el catch externo
+        }
+      }
 
     } catch (error) {
-      console.error('Error cargando datos:', error);
+      console.error('❌ Error crítico cargando datos iniciales:', error);
+      
+      // Manejar diferentes tipos de errores
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        console.error('🌐 Error de conexión - Verifica que el servidor esté funcionando');
+      } else if (error instanceof SyntaxError && error.message.includes('JSON')) {
+        console.error('📄 Error de formato JSON - Respuesta inválida del servidor');
+      } else {
+        console.error('🔥 Error inesperado:', error);
+      }
+      
+      // Establecer datos por defecto para evitar crashes
+      setBooks([]);
+      setUsers([]);
+      setStats({
+        total_books: 0,
+        total_copies: 0,
+        available_copies: 0,
+        borrowed_copies: 0,
+        total_users: 0,
+        active_users: 0,
+        utilization_rate: 0
+      });
     } finally {
       setLoading(false);
+      console.log('🏁 Proceso de carga finalizado');
     }
   };
 
