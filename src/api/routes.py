@@ -99,9 +99,12 @@ def get_books():
     GARANTIZA: Respuesta JSON válida siempre
     """
     try:
+        print("📚 GET /api/books - Iniciando...")
         books = library_service.get_books_json()
+        print(f"📚 GET /api/books - {len(books)} libros encontrados")
         return success_response(books, f"Se encontraron {len(books)} libros")
     except Exception as e:
+        print(f"❌ GET /api/books - Error: {str(e)}")
         return handle_exception(e)
 
 @app.route('/api/books/search', methods=['GET'])
@@ -237,9 +240,12 @@ def get_users():
     Complejidad: O(n) - Recorrido in-order del BST
     """
     try:
+        print("👥 GET /api/users - Iniciando...")
         users = library_service.get_users_json()
+        print(f"👥 GET /api/users - {len(users)} usuarios encontrados")
         return success_response(users, f"Se encontraron {len(users)} usuarios")
     except Exception as e:
+        print(f"❌ GET /api/users - Error: {str(e)}")
         return handle_exception(e)
 
 @app.route('/api/users/search', methods=['GET'])
@@ -452,9 +458,12 @@ def get_statistics():
     GARANTIZA: Respuesta JSON válida siempre
     """
     try:
+        print("📊 GET /api/stats - Iniciando...")
         stats = library_service.get_general_statistics()
+        print(f"📊 GET /api/stats - Estadísticas calculadas: {stats}")
         return success_response(stats, "Estadísticas generales")
     except Exception as e:
+        print(f"❌ GET /api/stats - Error: {str(e)}")
         return handle_exception(e)
 
 @app.route('/api/history', methods=['GET'])
